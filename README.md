@@ -4,8 +4,10 @@ A small React and FastAPI chatbot with SQLite history, LiteLLM key failover, and
 
 ## Live URLs
 
-- Frontend: not deployed yet
+- Frontend: https://ansh-01012005.github.io/lyftr-chatbot/
 - Backend: not deployed yet
+
+The frontend is deployed to GitHub Pages as a static Vite build. GitHub Pages cannot host the FastAPI backend, so chat requests need a separately hosted backend URL. Set the repository variable `VITE_API_BASE_URL` to that public backend URL and re-run the Pages workflow. Until then, the deployed UI falls back to `http://localhost:8000`.
 
 The local app is available at `http://localhost:3000` and `http://localhost:8000` after starting Docker. A public deployment still needs hosting accounts and real provider keys.
 
@@ -76,3 +78,9 @@ OpenCode was used to create the project. The app uses React, Vite, FastAPI, Lite
 
 - Offline demo mode makes the app easy to run before provider credentials are available.
 - The system prompt can be set from the chat UI.
+
+## Frontend deployment
+
+The `Deploy frontend to GitHub Pages` workflow builds `frontend/` with Vite and publishes the static bundle to GitHub Pages. It runs on pushes to `main` that change the frontend, or manually from the Actions tab.
+
+To connect the live frontend to a hosted API, add a repository variable named `VITE_API_BASE_URL` under **Settings → Secrets and variables → Actions → Variables**, then re-run the workflow.
