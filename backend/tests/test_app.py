@@ -36,12 +36,15 @@ def test_health_and_offline_demo_mode(tmp_path):
     )
     app = create_app(config)
     with TestClient(app) as client:
+        root = client.get("/")
         health = client.get("/health")
         chat = client.post(
             "/chat",
             json={"session_id": "demo", "message": "Capital of France?"},
         )
 
+    assert root.status_code == 200
+    assert root.json()["service"] == "Lyftr Chatbot API"
     assert health.json() == {
         "status": "ok",
         "keys_configured": 2,

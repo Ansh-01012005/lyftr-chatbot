@@ -359,6 +359,15 @@ def create_app(
             content={"detail": "internal server error"},
         )
 
+    @app.get("/")
+    async def root():
+        return {
+            "service": "Lyftr Chatbot API",
+            "status": "ok",
+            "health": "/health",
+            "chat": "POST /chat",
+        }
+
     @app.get("/health")
     async def health():
         store.ping()
