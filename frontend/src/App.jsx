@@ -1,9 +1,54 @@
 import { useState } from "react";
 
 const API_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
 
 function newSessionId() {
   return globalThis.crypto?.randomUUID?.() || `s-${Date.now()}-${Math.random()}`;
+}
+
+function buildDemoReply(message, history) {
+  const priorQuestions = history
+    .filter((item) => item.role === "user")
+    .map((item) => item.content);
+  const lowered = message.toLowerCase();
+  let reply;
+
+  if (lowered.includes("capital of france")) {
+    reply = "The capital of France is Paris.";
+  } else if (
+    lowered.includes("what did i ask") ||
+    lowered.includes("what was my first question")
+  ) {
+    const earlier = priorQuestions[priorQuestions.length - 1];
+    reply = earlier
+      ? `Your earlier question was: ${earlier}`
+      : "You haven't asked anything before this.";
+  } else {
+    reply = `You said: ${message}`;
+  }
+
+  const inputTokens = [
+    ...history.map((item) => item.content),
+    message,
+  ]
+    .join(" ")
+    .split(/\s+/)
+    .filter(Boolean).length;
+  const outputTokens = reply.split(/\s+/).filter(Boolean).length;
+
+  return {
+    reply,
+    metadata: {
+      resolution_source: "OFFLINE_DEMO",
+      model: "demo/browser",
+      latency_ms: 320,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      key_id: null,
+      fallback_attempts: 0,
+    },
+  };
 }
 
 export default function App() {
@@ -23,22 +68,30 @@ export default function App() {
     setMessages((current) => [...current, { role: "user", content: message }]);
 
     try {
-      const response = await fetch(`${API_URL}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId,
-          message,
-          ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {}),
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        const detail = Array.isArray(data.detail)
-          ? data.detail.map((item) => item.msg).join(", ")
-          : data.detail;
-        throw new Error(detail || "The request could not be completed.");
+      let data;
+
+      if (DEMO_MODE) {
+        await new Promise((resolve) => setTimeout(resolve, 320));
+        data = buildDemoReply(message, messages);
+      } else {
+        const response = await fetch(`${API_URL}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sessionId,
+            message,
+            ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {}),
+          }),
+        });
+        data = await response.json();
+        if (!response.ok) {
+          const detail = Array.isArray(data.detail)
+            ? data.detail.map((item) => item.msg).join(", ")
+            : data.detail;
+          throw new Error(detail || "The request could not be completed.");
+        }
       }
+
       setMessages((current) => [
         ...current,
         { role: "assistant", content: data.reply, metadata: data.metadata },
@@ -74,6 +127,13 @@ export default function App() {
           </div>
           <span className="session-pill">New session</span>
         </header>
+
+        {DEMO_MODE && (
+          <div className="demo-banner" role="status">
+            <strong>Offline demo</strong> — replies are generated in your
+            browser because the API backend isn't connected.
+          </div>
+        )}
 
         <div className="intro">
           <div className="sparkle" aria-hidden="true">✦</div>

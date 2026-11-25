@@ -101,6 +101,21 @@ textarea {
   font-size: 11px;
 }
 
+.demo-banner {
+  margin: 16px 26px 0;
+  padding: 9px 12px;
+  border: 1px solid #dbe6fb;
+  border-radius: 10px;
+  color: #496080;
+  background: #f5f8ff;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.demo-banner strong {
+  color: #244fa9;
+}
+
 .intro {
   padding: 38px 34px 22px;
   text-align: center;
@@ -358,6 +373,10 @@ textarea {
 
   .topbar {
     padding: 16px 19px;
+  }
+
+  .demo-banner {
+    margin: 12px 20px 0;
   }
 
   .intro {
