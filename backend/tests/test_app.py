@@ -45,10 +45,50 @@ def test_health_and_offline_demo_mode(tmp_path):
     assert health.json() == {
         "status": "ok",
         "keys_configured": 2,
+        "models_configured": 1,
         "cache_enabled": True,
     }
     assert chat.json()["reply"] == "The capital of France is Paris."
     assert chat.json()["metadata"]["model"] == "demo/mock-chat"
+
+
+def test_single_key_and_model_fallback(tmp_path):
+    calls = []
+
+    async def fake_completion(**kwargs):
+        calls.append(kwargs["model"])
+        if kwargs["model"] == "test/primary":
+            raise RuntimeError("model unavailable")
+        return {
+            "model": kwargs["model"],
+            "choices": [{"message": {"content": "Fallback reply"}}],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 2},
+        }
+
+    config = Config(
+        mode="litellm",
+        keys=("only-key",),
+        model="test/primary",
+        fallback_models=("test/fallback",),
+        database_url=f"sqlite:///{tmp_path / 'single.db'}",
+        allowed_origins=("http://localhost:3000",),
+        failure_simulation=False,
+    )
+    app = create_app(config, completion=fake_completion)
+    with TestClient(app) as client:
+        health = client.get("/health")
+        chat = client.post(
+            "/chat",
+            json={"session_id": "fallback", "message": "hello"},
+        )
+
+    assert health.status_code == 200
+    assert health.json()["keys_configured"] == 1
+    assert health.json()["models_configured"] == 2
+    assert calls == ["test/primary", "test/fallback"]
+    assert chat.status_code == 200
+    assert chat.json()["metadata"]["model"] == "test/fallback"
+    assert chat.json()["metadata"]["fallback_attempts"] == 1
 
 
 def test_cache_works_across_sessions_and_keeps_usage(tmp_path):

@@ -30,7 +30,12 @@ class Config:
     database_url: str
     allowed_origins: tuple[str, ...]
     failure_simulation: bool
+    fallback_models: tuple[str, ...] = ()
     default_prompt: str = "You are a helpful assistant. Keep replies clear and concise."
+
+    @property
+    def models(self) -> tuple[str, ...]:
+        return (self.model, *self.fallback_models)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -41,6 +46,14 @@ class Config:
             keys = ("demo-key-1", "demo-key-2")
 
         default_model = "demo/mock-chat" if mode == "mock" else "gemini/gemini-2.0-flash"
+        primary_model = os.getenv("LLM_MODEL", default_model).strip()
+        fallback_models = tuple(
+            dict.fromkeys(
+                model.strip()
+                for model in os.getenv("LLM_FALLBACK_MODELS", "").split(",")
+                if model.strip() and model.strip() != primary_model
+            )
+        )
         origins = tuple(
             origin.strip()
             for origin in os.getenv(
@@ -52,7 +65,8 @@ class Config:
         return cls(
             mode=mode,
             keys=keys,
-            model=os.getenv("LLM_MODEL", default_model).strip(),
+            model=primary_model,
+            fallback_models=fallback_models,
             database_url=os.getenv("DATABASE_URL", "sqlite:///./data/app.db").strip(),
             allowed_origins=origins,
             failure_simulation=os.getenv(
@@ -348,11 +362,12 @@ def create_app(
     @app.get("/health")
     async def health():
         store.ping()
-        if len(config.keys) < 2:
+        if not config.keys:
             raise HTTPException(status_code=503, detail="key pool unavailable")
         return {
             "status": "ok",
             "keys_configured": len(config.keys),
+            "models_configured": len(config.models),
             "cache_enabled": True,
         }
 
@@ -416,84 +431,86 @@ def create_app(
 
         call = completion or litellm_completion
         failures = 0
-        for index, api_key in enumerate(config.keys, start=1):
-            key_id = f"key_{index}"
-            if key_id in failure_rules or "*" in failure_rules:
-                failures += 1
-                continue
+        for selected_model in config.models:
+            for index, api_key in enumerate(config.keys, start=1):
+                key_id = f"key_{index}"
+                if key_id in failure_rules or "*" in failure_rules:
+                    failures += 1
+                    continue
 
-            started = time.perf_counter()
-            try:
-                if config.mode == "mock":
-                    result = mock_completion(messages, config.model)
-                else:
-                    result = await call(
-                        model=config.model,
-                        messages=messages,
-                        api_key=api_key,
-                        use_cache=not bool(failure_rules),
-                    )
-                choices = value(result, "choices", []) or []
-                first_choice = choices[0] if choices else {}
-                answer_message = value(first_choice, "message", {}) or {}
-                reply = value(answer_message, "content", "") or ""
-                if isinstance(reply, list):
-                    reply = "".join(
-                        str(value(part, "text", ""))
-                        for part in reply
-                    )
-                reply = str(reply).strip()
-                if not reply:
-                    raise ValueError("empty model response")
+                started = time.perf_counter()
+                try:
+                    if config.mode == "mock":
+                        result = mock_completion(messages, selected_model)
+                    else:
+                        result = await call(
+                            model=selected_model,
+                            messages=messages,
+                            api_key=api_key,
+                            use_cache=not bool(failure_rules),
+                        )
+                    choices = value(result, "choices", []) or []
+                    first_choice = choices[0] if choices else {}
+                    answer_message = value(first_choice, "message", {}) or {}
+                    reply = value(answer_message, "content", "") or ""
+                    if isinstance(reply, list):
+                        reply = "".join(
+                            str(value(part, "text", ""))
+                            for part in reply
+                        )
+                    reply = str(reply).strip()
+                    if not reply:
+                        raise ValueError("empty model response")
 
-                usage = value(result, "usage", {}) or {}
-                input_tokens = int(
-                    value(usage, "prompt_tokens", 0) or count_words(messages)
+                    usage = value(result, "usage", {}) or {}
+                    input_tokens = int(
+                        value(usage, "prompt_tokens", 0) or count_words(messages)
+                    )
+                    output_tokens = int(
+                        value(usage, "completion_tokens", 0)
+                        or max(1, len(reply.split()))
+                    )
+                    used_model = value(result, "model", None) or selected_model
+                    metadata = {
+                        "resolution_source": "LIVE_INFERENCE",
+                        "model": used_model,
+                        "latency_ms": max(
+                            1,
+                            int((time.perf_counter() - started) * 1000),
+                        ),
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "key_id": key_id,
+                        "fallback_attempts": failures,
+                    }
+                except Exception as exc:
+                    logger.warning(
+                        "Provider call failed for %s on %s: %s",
+                        key_id,
+                        selected_model,
+                        type(exc).__name__,
+                    )
+                    failures += 1
+                    continue
+
+                store.save_exchange(
+                    request.session_id,
+                    system_prompt,
+                    request.message,
+                    reply,
+                    metadata,
                 )
-                output_tokens = int(
-                    value(usage, "completion_tokens", 0)
-                    or max(1, len(reply.split()))
-                )
-                model = value(result, "model", None) or config.model
-                metadata = {
-                    "resolution_source": "LIVE_INFERENCE",
-                    "model": model,
-                    "latency_ms": max(
-                        1,
-                        int((time.perf_counter() - started) * 1000),
-                    ),
+                response_cache[cache_key] = {
+                    "reply": reply,
+                    "model": used_model,
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
-                    "key_id": key_id,
-                    "fallback_attempts": failures,
                 }
-            except Exception as exc:
-                logger.warning(
-                    "Provider call failed for %s: %s",
-                    key_id,
-                    type(exc).__name__,
-                )
-                failures += 1
-                continue
-
-            store.save_exchange(
-                request.session_id,
-                system_prompt,
-                request.message,
-                reply,
-                metadata,
-            )
-            response_cache[cache_key] = {
-                "reply": reply,
-                "model": model,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-            }
-            return {
-                "session_id": request.session_id,
-                "reply": reply,
-                "metadata": metadata,
-            }
+                return {
+                    "session_id": request.session_id,
+                    "reply": reply,
+                    "metadata": metadata,
+                }
 
         raise HTTPException(
             status_code=503,

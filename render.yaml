@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: lyftr-chatbot-api
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: LLM_MODE
+        value: litellm
+      - key: LLM_API_KEYS
+        sync: false
+      - key: LLM_MODEL
+        value: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+      - key: LLM_FALLBACK_MODELS
+        value: openrouter/baidu/ernie-5.5-flash-preview:free,openrouter/google/gemma-4-31b-it:free,openrouter/inclusionai/ling-3.2-flash:free
+      - key: DATABASE_URL
+        value: sqlite:////tmp/app.db
+      - key: ALLOWED_ORIGINS
+        value: https://ansh-01012005.github.io
+      - key: ENABLE_FAILURE_SIMULATION
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
